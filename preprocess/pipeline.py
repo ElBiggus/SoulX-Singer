@@ -4,6 +4,8 @@ import soundfile as sf
 from pathlib import Path
 import librosa
 
+from soulxsinger.utils.file_utils import load_config, resolve_device_from_config, resolve_device
+
 from preprocess.utils import convert_metadata, merge_short_segments
 
 from preprocess.tools import (
@@ -12,6 +14,9 @@ from preprocess.tools import (
     VocalSeparator,
     NoteTranscriber,
     LyricTranscriber,
+    NOTE_TRANSCRIBER_IMPORT_ERROR,
+    LYRIC_TRANSCRIBER_IMPORT_ERROR,
+    VOCAL_SEPARATOR_IMPORT_ERROR,
 )
 
 
@@ -23,7 +28,24 @@ class PreprocessPipeline:
         self.vocal_sep = vocal_sep
         self.max_merge_duration = max_merge_duration
 
+        if LyricTranscriber is None:
+            raise ImportError(
+                "LyricTranscriber import failed. "
+                f"Original error: {LYRIC_TRANSCRIBER_IMPORT_ERROR!r}"
+            )
+        if NoteTranscriber is None:
+            raise ImportError(
+                "NoteTranscriber import failed. "
+                f"Original error: {NOTE_TRANSCRIBER_IMPORT_ERROR!r}. "
+                "A common fix is installing setuptools: `pip install setuptools`."
+            )
+
         if vocal_sep:
+            if VocalSeparator is None:
+                raise ImportError(
+                    "VocalSeparator import failed. "
+                    f"Original error: {VOCAL_SEPARATOR_IMPORT_ERROR!r}"
+                )
             self.vocal_separator = VocalSeparator(
                 sep_model_path="pretrained_models/SoulX-Singer-Preprocess/mel-band-roformer-karaoke/mel_band_roformer_karaoke_becruily.ckpt",
                 sep_config_path="pretrained_models/SoulX-Singer-Preprocess/mel-band-roformer-karaoke/config_karaoke_becruily.yaml",
@@ -118,8 +140,15 @@ class PreprocessPipeline:
 
 
 def main(args):
+    if args.config:
+        config = load_config(args.config)
+        device = resolve_device_from_config(config, args.device)
+    else:
+        device = resolve_device(device=args.device, gpu=0)
+    print(f"Using device: {device}")
+
     pipeline = PreprocessPipeline(
-        device=args.device,
+        device=device,
         language=args.language,
         save_dir=args.save_dir,
         vocal_sep=args.vocal_sep,
@@ -138,7 +167,18 @@ if __name__ == "__main__":
     parser.add_argument("--audio_path", type=str, required=True, help="Path to the input audio file")
     parser.add_argument("--save_dir", type=str, required=True, help="Directory to save the output files")
     parser.add_argument("--language", type=str, default="Mandarin", help="Language of the audio")
-    parser.add_argument("--device", type=str, default="cuda:0", help="Device to run the models on")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Optional device override (e.g. cuda:0, cuda:1, cpu, or GPU index like 0/1). If unset, uses config.gpu.",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="soulxsinger/config/soulxsinger.yaml",
+        help="Path to model config containing gpu index.",
+    )
     parser.add_argument("--vocal_sep", type=bool, default=True, help="Whether to perform vocal separation")
     parser.add_argument("--max_merge_duration", type=int, default=60000, help="Maximum merged segment duration in milliseconds")    
     args = parser.parse_args()

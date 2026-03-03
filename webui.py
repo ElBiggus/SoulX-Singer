@@ -1,8 +1,12 @@
 import os
+os.environ["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
+os.environ["HF_TRUST_REMOTE_CODE"] = "1"
+os.environ["PYTHONHASHSEED"] = "0"  # Optional: helps with some environment consistency
 import random
 import shutil
 import sys
 import traceback
+import gc
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, Tuple
@@ -15,7 +19,7 @@ import gradio as gr
 
 from preprocess.pipeline import PreprocessPipeline
 from preprocess.tools.midi_parser import MidiParser
-from soulxsinger.utils.file_utils import load_config
+from soulxsinger.utils.file_utils import load_config, resolve_device_from_config
 from cli.inference import build_model as build_svs_model, process as svs_process
 
 
@@ -160,6 +164,9 @@ _I18N_KEY2LANG = dict(
 _GLOBAL_LANG: Literal["zh", "en"] = "zh"
 
 
+DEFAULT_LYRIC_LANG = "English"
+
+
 def _i18n(key: str) -> str:
     return _I18N_KEY2LANG[key][_GLOBAL_LANG]
 
@@ -210,11 +217,6 @@ def _clear_target_meta_unless_example(_audio, skip_count):
     if skip_count and skip_count > 0:
         return gr.skip(), max(0, skip_count - 1)
     return None, 0
-
-
-def _get_device() -> str:
-    """Use CUDA if available, else CPU (e.g. for CI or CPU-only environments)."""
-    return "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
 def _session_dir() -> Path:
@@ -273,26 +275,44 @@ def _control_to_internal(control: str) -> str:
 
 class AppState:
     def __init__(self) -> None:
-        self.device = _get_device()
-        self.preprocess_pipeline = PreprocessPipeline(
-            device=self.device,
-            language="Mandarin",
-            save_dir=str(ROOT / "outputs" / "gradio" / "_placeholder" / "transcriptions"),
-            vocal_sep=True,
-            max_merge_duration=60000,
-        )
         config = load_config("soulxsinger/config/soulxsinger.yaml")
+        self.device = resolve_device_from_config(config)
+        self.preprocess_pipeline = None
+        self.preprocess_init_error = None
+        try:
+            self.preprocess_pipeline = PreprocessPipeline(
+                device=self.device,
+                language="Mandarin",
+                save_dir=str(ROOT / "outputs" / "gradio" / "_placeholder" / "transcriptions"),
+                vocal_sep=True,
+                max_merge_duration=60000,
+            )
+        except Exception as e:
+            self.preprocess_init_error = str(e)
+            print(
+                f"[warning] preprocess pipeline unavailable: {self.preprocess_init_error}. "
+                "Install missing dependencies and restart.",
+                file=sys.stderr,
+                flush=True,
+            )
         self.svs_config = config
         self.svs_model = build_svs_model(
             model_path="pretrained_models/SoulX-Singer/model.pt",
             config=config,
             device=self.device,
         )
+        print(f"Using device: {self.device}")
         self.phoneset_path = "soulxsinger/utils/phoneme/phone_set.json"
         self.midi_parser = MidiParser(
             rmvpe_model_path="pretrained_models/SoulX-Singer-Preprocess/rmvpe/rmvpe.pt",
             device=self.device
         )
+
+    def _clear_cuda_memory(self) -> None:
+        gc.collect()
+        if self.device.startswith("cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
 
     def run_preprocess(
         self,
@@ -303,6 +323,14 @@ class AppState:
         max_merge_duration: int
     ) -> Tuple[bool, str]:
         try:
+            if self.preprocess_pipeline is None:
+                err_msg = self.preprocess_init_error or "unknown dependency issue"
+                return False, (
+                    "preprocess unavailable: "
+                    f"{err_msg}. "
+                    "Try: pip install setuptools"
+                )
+            self._clear_cuda_memory()
             self.preprocess_pipeline.save_dir = str(save_path)
             self.preprocess_pipeline.run(
                 audio_path=str(audio_path),
@@ -313,6 +341,8 @@ class AppState:
             return True, f"preprocess {audio_path} done"
         except Exception as e:
             return False, f"preprocess failed: {e}"
+        finally:
+            self._clear_cuda_memory()
 
     def run_svs(
         self,
@@ -565,6 +595,8 @@ def _instruction_md() -> str:
 
 
 def render_interface() -> gr.Blocks:
+    global _GLOBAL_LANG
+    _GLOBAL_LANG = "en"
     with gr.Blocks(title="SoulX-Singer 歌声合成Demo", theme=gr.themes.Default()) as page:
         gr.HTML(
             '<div style="'
@@ -592,7 +624,7 @@ def render_interface() -> gr.Blocks:
         with gr.Row(equal_height=True):
             lang_choice = gr.Radio(
                 choices=["中文", "English"],
-                value="中文",
+                value="English",
                 label=_i18n("display_lang_label"),
                 type="index",
                 interactive=True,
@@ -635,7 +667,7 @@ def render_interface() -> gr.Blocks:
                 prompt_lyric_lang = gr.Dropdown(
                     label=_i18n("prompt_lyric_lang_label"),
                     choices=_get_lyric_lang_choices(),
-                    value="Mandarin",
+                    value=DEFAULT_LYRIC_LANG,
                     interactive=True,
                     scale=1,
                 )
@@ -649,7 +681,7 @@ def render_interface() -> gr.Blocks:
                 target_lyric_lang = gr.Dropdown(
                     label=_i18n("target_lyric_lang_label"),
                     choices=_get_lyric_lang_choices(),
-                    value="Mandarin",
+                    value=DEFAULT_LYRIC_LANG,
                     interactive=True,
                     scale=1,
                 )

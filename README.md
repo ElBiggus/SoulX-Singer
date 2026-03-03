@@ -89,31 +89,39 @@ conda activate soulxsinger
 ```
 pip install -r requirements.txt
 ```
+
+- `requirements.txt`: full environment snapshot (`pip freeze`) for exact reproducibility.
+- `requirements.project.txt`: slimmer direct dependency set for typical development/inference setup.
+
+For a lighter install, use:
+```
+pip install -r requirements.project.txt
+```
+
 ⚠️ If you are in mainland China, use a PyPI mirror:
 ```
 pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host=mirrors.aliyun.com
 ```
+You can replace `requirements.txt` with `requirements.project.txt` in the same command.
 
 
 ---
 
 ### 3. Download Pretrained Models
 
-Install Hugging Face Hub if needed:
 
-```
-pip install -U huggingface_hub
-```
 
-Download the SVS model and preprocessing models:
+Download the SVS model, perceptron, and preprocessing models:
 ```sh
-pip install -U huggingface_hub
-
 # Download the SoulX-Singer SVS model
 hf download Soul-AILab/SoulX-Singer --local-dir pretrained_models/SoulX-Singer
 
+# Install perceptron
+python3 install.py
+
 # Download models required for preprocessing
 hf download Soul-AILab/SoulX-Singer-Preprocess --local-dir pretrained_models/SoulX-Singer-Preprocess
+hf download nvidia/parakeet-tdt-0.6b-v2 --local-dir pretrained_models/parakeet-tdt-0.6b-v2
 ```
 
 
@@ -124,7 +132,17 @@ Run the inference demo:
 bash example/infer.sh
 ```
 
+GPU selection for inference is configured in [soulxsinger/config/soulxsinger.yaml](soulxsinger/config/soulxsinger.yaml) via:
+
+```yaml
+gpu: 0  # use cuda:0, set 1 for cuda:1, etc.
+```
+
+You can still override at runtime with `--device` (e.g. `--device cuda:1` or `--device cpu`).
+
 This script relies on metadata generated from the preprocessing pipeline, including vocal separation and transcription. Users should follow the steps in [preprocess](preprocess/README.md) to prepare the necessary metadata before running the demo with their own data.
+
+Preprocessing uses the same GPU selection in [soulxsinger/config/soulxsinger.yaml](soulxsinger/config/soulxsinger.yaml) via `gpu` (and also supports runtime override with `--device`).
 
 **⚠️ Important Note**
 The metadata produced by the automatic preprocessing pipeline may not perfectly align the singing audio with the corresponding lyrics and musical notes. For best synthesis quality, we strongly recommend manually correcting the alignment using the 🎼 [Midi-Editor](https://huggingface.co/spaces/Soul-AILab/SoulX-Singer-Midi-Editor). 

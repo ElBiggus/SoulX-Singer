@@ -63,9 +63,12 @@ class LlamaNARDecoderLayer(LlamaDecoderLayer):
         cond_embedding: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        past_key_values: Optional[Tuple[torch.Tensor]] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
+        **kwargs,
     ) -> Tuple[
         torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
     ]:
@@ -90,14 +93,29 @@ class LlamaNARDecoderLayer(LlamaDecoderLayer):
         )
 
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        if position_embeddings is None:
+            if position_ids is None:
+                seq_len = hidden_states.shape[1]
+                position_ids = torch.arange(seq_len, device=hidden_states.device).unsqueeze(0)
+            position_embeddings = self.self_attn.rotary_emb(hidden_states, position_ids)
+
+        self_attn_outputs = self.self_attn(
             hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
             attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
+            past_key_values=past_key_values,
+            cache_position=cache_position,
+            **kwargs,
         )
+
+        if isinstance(self_attn_outputs, tuple):
+            hidden_states = self_attn_outputs[0]
+            self_attn_weights = self_attn_outputs[1] if len(self_attn_outputs) > 1 else None
+            present_key_value = self_attn_outputs[2] if len(self_attn_outputs) > 2 else past_key_values
+        else:
+            hidden_states = self_attn_outputs
+            self_attn_weights = None
+            present_key_value = past_key_values
         hidden_states = residual + hidden_states
 
         # Fully Connected
@@ -119,6 +137,11 @@ class LlamaNARDecoderLayer(LlamaDecoderLayer):
         return outputs
 
 
+def _set_attn_impl(cfg: LlamaConfig) -> LlamaConfig:
+    cfg._attn_implementation = "sdpa"
+    return cfg
+
+
 class DiffLlama(LlamaModel):
     def __init__(
         self,
@@ -129,18 +152,32 @@ class DiffLlama(LlamaModel):
         dropout=0.1,
         ffn_dropout=0.1,
         attention_dropout=0.0,
-        config=LlamaConfig(0, 256, 1024, 1, 1),
+        config=None,
     ):
+        if config is None:
+            config = _set_attn_impl(LlamaConfig(
+                vocab_size=1,
+                hidden_size=hidden_size,
+                num_hidden_layers=num_layers,
+                num_attention_heads=num_heads,
+                intermediate_size=hidden_size * 4,
+                max_position_embeddings=4096,
+            ))
+        else:
+            config = _set_attn_impl(config)
+
         super().__init__(config)
 
         self.layers = nn.ModuleList(
             [
                 LlamaNARDecoderLayer(
-                    LlamaConfig(
-                        hidden_size=hidden_size,
-                        num_attention_heads=num_heads,
-                        max_position_embeddings=4096,
-                        intermediate_size=hidden_size * 4,
+                    _set_attn_impl(
+                        LlamaConfig(
+                            hidden_size=hidden_size,
+                            num_attention_heads=num_heads,
+                            max_position_embeddings=4096,
+                            intermediate_size=hidden_size * 4,
+                        )
                     ),
                     layer_idx=i,
                 )
@@ -325,8 +362,16 @@ class DiffLlama(LlamaModel):
                 all_hidden_states += (hidden_states,)
 
             past_key_value = (
-                past_key_values[idx] if past_key_values is not None else None
+                past_key_values[idx] if isinstance(past_key_values, (list, tuple)) else None
             )
+
+            cache_position = torch.arange(
+                past_key_values_length,
+                past_key_values_length + seq_length,
+                device=hidden_states.device,
+            )
+
+            position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
             if self.gradient_checkpointing and self.training:
                 raise NotImplementedError
@@ -350,7 +395,9 @@ class DiffLlama(LlamaModel):
                     hidden_states,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
-                    past_key_value=past_key_value,
+                    past_key_values=past_key_value,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     cond_embedding=diffusion_step,
