@@ -20,6 +20,8 @@ Note:
 
 from __future__ import annotations
 
+import sys
+
 # Core tools
 from .f0_extraction import F0Extractor
 from .vocal_detection import VocalDetector
@@ -31,14 +33,24 @@ try:
 except Exception:  # pragma: no cover
     VocalSeparator = None  # type: ignore
 
+    VOCAL_SEPARATOR_IMPORT_ERROR = sys.exc_info()[1]
+else:
+    VOCAL_SEPARATOR_IMPORT_ERROR = None
+
 try:
     from .note_transcription.model import NoteTranscriber  # type: ignore
 except Exception:  # pragma: no cover
     NoteTranscriber = None  # type: ignore
+    NOTE_TRANSCRIBER_IMPORT_ERROR = sys.exc_info()[1]
+else:
+    NOTE_TRANSCRIBER_IMPORT_ERROR = None
 try:
     from .lyric_transcription import LyricTranscriber
 except Exception:  # pragma: no cover
     LyricTranscriber = None  # type: ignore
+    LYRIC_TRANSCRIBER_IMPORT_ERROR = sys.exc_info()[1]
+else:
+    LYRIC_TRANSCRIBER_IMPORT_ERROR = None
 
 __all__ = [
     "F0Extractor",

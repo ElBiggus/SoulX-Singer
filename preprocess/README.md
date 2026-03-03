@@ -48,6 +48,17 @@ Before running the pipeline, set up the Python environment as follows:
    pip install -r requirements.txt
    ```
 
+  For full-project setup from the repository root:
+
+  - `requirements.txt`: full environment snapshot (`pip freeze`) for exact reproducibility.
+  - `requirements.project.txt`: slimmer direct dependency set for typical development/inference setup.
+
+  Example from the root directory:
+
+  ```bash
+  pip install -r requirements.project.txt
+  ```
+
 ## 📁 Data Preparation
 
 Before running the pipeline, prepare the following inputs:
@@ -75,6 +86,14 @@ After configuring `preprocess.sh`, run the transcription pipeline with:
 ```bash
 bash example/preprocess.sh
 ```
+
+GPU selection in this workflow follows `gpu` in [soulxsinger/config/soulxsinger.yaml](../soulxsinger/config/soulxsinger.yaml), for example:
+
+```yaml
+gpu: 0  # use cuda:0, set 1 for cuda:1, etc.
+```
+
+You can still override with `--device` when running `python -m preprocess.pipeline` directly.
 
 The script will automatically execute the following steps:
 

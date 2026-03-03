@@ -8,7 +8,7 @@ import soundfile as sf
 from collections import OrderedDict
 from omegaconf import DictConfig
 
-from soulxsinger.utils.file_utils import load_config
+from soulxsinger.utils.file_utils import load_config, resolve_device_from_config
 from soulxsinger.models.soulxsinger import SoulXSinger
 from soulxsinger.utils.data_processor import DataProcessor
 
@@ -124,7 +124,12 @@ def main(args, config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Optional device override (e.g. cuda:0, cuda:1, cpu, or GPU index like 0/1). If unset, uses config.gpu.",
+    )
     parser.add_argument("--model_path", type=str, default='pretrained_models/soulx-singer/model.pt')
     parser.add_argument("--config", type=str, default='soulxsinger/config/soulxsinger.yaml')
     parser.add_argument("--prompt_wav_path", type=str, default='example/audio/zh_prompt.wav')
@@ -144,4 +149,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     config = load_config(args.config)
+    args.device = resolve_device_from_config(config, args.device)
+    print(f"Using device: {args.device}")
     main(args, config)

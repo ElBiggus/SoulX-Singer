@@ -8,9 +8,10 @@ Description:
 
 import os
 import json
+import torch
 
 from tqdm import tqdm
-from typing import List, Dict
+from typing import List, Dict, Optional
 from pathlib import Path
 from omegaconf import OmegaConf, DictConfig
 
@@ -75,3 +76,42 @@ def load_config(config_path: Path) -> DictConfig:
         config = OmegaConf.merge(base_config, config)
 
     return config
+
+
+def resolve_device(device: Optional[str] = None, gpu: Optional[int] = 0) -> str:
+    """Resolve runtime device string.
+
+    Priority:
+    1) Explicit ``device`` argument (supports values like ``cuda:1`` / ``cpu`` / ``1``)
+    2) ``gpu`` index from config mapped to ``cuda:{gpu}``
+    3) CPU fallback when CUDA is unavailable
+    """
+    if not torch.cuda.is_available():
+        return "cpu"
+
+    cuda_count = torch.cuda.device_count()
+
+    if device is not None and str(device).strip() != "":
+        normalized = str(device).strip().lower()
+        if normalized.isdigit():
+            idx = int(normalized)
+            if 0 <= idx < cuda_count:
+                return f"cuda:{idx}"
+            return "cuda:0"
+        return str(device).strip()
+
+    try:
+        gpu_idx = int(gpu) if gpu is not None else 0
+    except (TypeError, ValueError):
+        gpu_idx = 0
+
+    if gpu_idx < 0 or gpu_idx >= cuda_count:
+        gpu_idx = 0
+
+    return f"cuda:{gpu_idx}"
+
+
+def resolve_device_from_config(config: DictConfig, device: Optional[str] = None) -> str:
+    """Resolve device using optional override and ``config.gpu``."""
+    gpu = config.get("gpu", 0) if config is not None else 0
+    return resolve_device(device=device, gpu=gpu)

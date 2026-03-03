@@ -6,7 +6,7 @@ root_dir=$(dirname "$script_dir")
 cd $root_dir || exit
 export PYTHONPATH=$root_dir:$PYTHONPATH
 
-device=cuda
+config=soulxsinger/config/soulxsinger.yaml
 
 
 ####### Run Prompt Annotation #######
@@ -20,7 +20,7 @@ python -m preprocess.pipeline \
     --audio_path $audio_path \
     --save_dir $save_dir \
     --language $language \
-    --device $device \
+    --config $config \
     --vocal_sep $vocal_sep \
     --max_merge_duration $max_merge_duration
 
@@ -36,6 +36,6 @@ python -m preprocess.pipeline \
     --audio_path $audio_path \
     --save_dir $save_dir \
     --language $language \
-    --device $device \
+    --config $config \
     --vocal_sep $vocal_sep \
     --max_merge_duration $max_merge_duration

@@ -3,6 +3,9 @@
 import os
 import re
 import time
+import io
+import contextlib
+import logging
 from typing import Any, Dict, List, Tuple
 
 import librosa
@@ -110,6 +113,7 @@ class _ASRZhModel:
     def __init__(self, model_path: str, device: str):
         self.model = AutoModel(
             model=model_path,
+            trust_remote_code=True,
             disable_update=True,
             device=device,
         )
@@ -132,19 +136,58 @@ class _ASREnModel:
     """English ASR wrapper for NeMo Parakeet-TDT."""
 
     def __init__(self, model_path: str, device: str):
+        for logger_name in (
+            "nemo",
+            "nemo_logger",
+            "nemo.utils",
+            "nv_one_logger",
+            "nv_one_logger.api.config",
+            "nv_one_logger.training_telemetry.api.training_telemetry_provider",
+        ):
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.ERROR)
+            logger.propagate = False
+
         try:
             import nemo.collections.asr as nemo_asr  # type: ignore
+            from nemo.utils import logging as nemo_logging  # type: ignore
         except Exception as e:  # pragma: no cover
             raise ImportError(
                 "NeMo (nemo_toolkit) is required for ASR English but is not available in this Python env. "
                 "Install it in the active environment, then retry."
             ) from e
 
-        self.model = nemo_asr.models.ASRModel.restore_from(
-            restore_path=model_path,
+        # Reduce NeMo console noise in inference-only usage.
+        try:
+            nemo_logging.set_verbosity(nemo_logging.ERROR)
+        except Exception:
+            pass
+
+        self.nemo_asr = nemo_asr
+        self.model_path = model_path
+        self.device = str(device)
+        self.model = self._restore_model(self.device)
+
+    @staticmethod
+    def _quiet_call(fn, *args, **kwargs):
+        sink = io.StringIO()
+        previous_disable = logging.root.manager.disable
+        logging.disable(logging.CRITICAL)
+        try:
+            with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                return fn(*args, **kwargs)
+        finally:
+            logging.disable(previous_disable)
+
+    def _restore_model(self, device: str):
+        model = self._quiet_call(
+            self.nemo_asr.models.ASRModel.restore_from,
+            restore_path=self.model_path,
             map_location=device,
         )
-        self.model.eval()
+        model.eval()
+        self.device = device
+        return model
 
     @staticmethod
     def _clean_word(word: str) -> str:
@@ -159,12 +202,33 @@ class _ASREnModel:
         return word_ts if isinstance(word_ts, list) else []
 
     def process(self, wav_fn: str) -> Tuple[List[str], List[float]]:
-        outputs = self.model.transcribe(
-            [wav_fn],
-            timestamps=True,
-            batch_size=1,
-            num_workers=0,
-        )
+        try:
+            outputs = self._quiet_call(
+                self.model.transcribe,
+                [wav_fn],
+                timestamps=True,
+                batch_size=1,
+                num_workers=0,
+                verbose=False,
+            )
+        except ValueError as err:
+            msg = str(err)
+            if "not enough values to unpack" in msg and self.device.startswith("cuda"):
+                print(
+                    "[lyric transcription] English ASR CUDA decoding failed; retrying on CPU.",
+                    flush=True,
+                )
+                self.model = self._restore_model("cpu")
+                outputs = self._quiet_call(
+                    self.model.transcribe,
+                    [wav_fn],
+                    timestamps=True,
+                    batch_size=1,
+                    num_workers=0,
+                    verbose=False,
+                )
+            else:
+                raise
         output = outputs[0] if outputs else None
 
         raw_words: List[str] = []

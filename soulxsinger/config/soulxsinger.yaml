@@ -1,3 +1,5 @@
+gpu: 1
+
 infer:
   n_steps: 32
   cfg: 3
